@@ -3,6 +3,8 @@ const cors = require('cors');
 const helmet = require('helmet');
 const redisClient = require('./redis');
 const planController = require('./planController');
+const verifyGoogleToken = require('./authMiddleware');
+const { applyMergePatch } = require('./mergePatch');
 
 class Server {
   constructor() {
@@ -21,15 +23,17 @@ class Server {
     this.app.use(cors({
       origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*',
       credentials: true,
-      methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'If-None-Match', 'Cache-Control']
+      methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+      allowedHeaders: ['Content-Type','Authorization','If-None-Match','If-Match','Cache-Control']
     }));
 
     // Body parsing middleware
-    this.app.use(express.json({ 
+    this.app.use(express.json({
       limit: '10mb',
-      strict: true 
-    }));
+      strict: true,
+      // parse merge-patch bodies too
+      type: ['application/json', 'application/merge-patch+json']
+      }));
     this.app.use(express.urlencoded({ 
       extended: true,
       limit: '10mb' 
@@ -50,17 +54,21 @@ class Server {
       next();
     });
 
-    // Content-Type validation for POST requests
+    // Content-Type validation for JSON & Merge Patch on v1/plan
     this.app.use('/v1/plan', (req, res, next) => {
-      if (req.method === 'POST') {
-        if (!req.is('application/json')) {
-          return res.status(415).json({
-            error: 'Unsupported Media Type',
-            message: 'Content-Type must be application/json'
-          });
+    if (['POST','PUT','PATCH'].includes(req.method)) {
+      const ct = req.headers['content-type'] || '';
+      if (req.method === 'PATCH') {
+        if (!ct.includes('application/merge-patch+json')) {
+          return res.status(415).json({ error: 'Content-Type must be application/merge-patch+json' });
+        }
+      } else {
+        if (!ct.includes('application/json')) {
+          return res.status(415).json({ error: 'Content-Type must be application/json' });
         }
       }
-      next();
+    }
+    next();
     });
   }
 
@@ -73,12 +81,14 @@ class Server {
     v1Router.get('/plan/:objectId', planController.getPlan.bind(planController));
     v1Router.delete('/plan/:objectId', planController.deletePlan.bind(planController));
     v1Router.get('/plans', planController.getAllPlans.bind(planController));
+    v1Router.put('/plan/:objectId', planController.updatePlan.bind(planController));
+    v1Router.patch('/plan/:objectId', planController.patchPlan.bind(planController));
 
     // Health check route
     v1Router.get('/health', planController.healthCheck.bind(planController));
 
     // Mount v1 router
-    this.app.use('/v1', v1Router);
+    this.app.use('/v1', verifyGoogleToken, v1Router);
 
     // Root route
     this.app.get('/', (req, res) => {
@@ -157,10 +167,10 @@ class Server {
 
       // Start Express server
       this.app.listen(this.port, () => {
-        console.log(`🚀 Server is running on port ${this.port}`);
-        console.log(`📚 API Documentation available at http://localhost:${this.port}/`);
-        console.log(`🏥 Health check available at http://localhost:${this.port}/v1/health`);
-        console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+        console.log(`Server is running on port ${this.port}`);
+        console.log(`API Documentation available at http://localhost:${this.port}/`);
+        console.log(`Health check available at http://localhost:${this.port}/v1/health`);
+        console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
       });
 
       // Graceful shutdown handlers
@@ -178,12 +188,12 @@ class Server {
     
     try {
       await redisClient.disconnect();
-      console.log('✅ Redis connection closed');
+      console.log('Redis connection closed');
     } catch (error) {
-      console.error('❌ Error closing Redis connection:', error);
+      console.error('Error closing Redis connection:', error);
     }
     
-    console.log('✅ Server shutdown complete');
+    console.log('Server shutdown complete');
     process.exit(0);
   }
 }
