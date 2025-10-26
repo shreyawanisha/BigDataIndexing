@@ -39,8 +39,10 @@
 5. APIs
    - BaseURL - <http://localhost:3000>
    - Create new plan - POST - /v1/plan
-   - Get Plan Conditional(Only if not modified) - /v1/plan/:objectId
-   - Delete Plan - /v1/plan/:objectId
+   - GET Plan Conditional(Only if not modified) - /v1/plan/:objectId
+   - PATCH Plan Conditional(Only if latest eTag available) - /v1/plan/:objectId
+   - PUT Plan Conditional(Only if latest eTag available) - /v1/plan/:objectId
+   - DELETE Plan Conditional(Only if latest eTag available) - /v1/plan/:objectId
 
 6. Complete Demo Workflow:
 
