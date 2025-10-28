@@ -58,7 +58,7 @@
    docker exec -it redis-server redis-cli
    KEYS *
    # To see values of keys
-   HGETALL plan:12xvxc345ssdsds-508
+   HGETALL plan:<ObjectId>
    exit
 ```
 
@@ -69,3 +69,21 @@
     docker run -d -p 6379:6379 --name redis-server redis:alpine
     npm start
 ```
+
+## Create ENV Files with these values -
+
+PORT=
+NODE_ENV=
+
+### Redis Configuration
+
+REDIS_HOST=
+REDIS_PORT=
+
+### CORS Configuration
+
+ALLOWED_ORIGINS=
+
+### Googel Client Id
+
+GOOGLE_CLIENT_ID=
