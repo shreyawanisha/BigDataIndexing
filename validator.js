@@ -35,22 +35,43 @@ class Validator {
   }
 
   validateNestedStructure(data) {
-    const issues = [], seen = new Set();
-    const add = (obj, path) => {
-      if (obj && obj.objectId) {
-        if (seen.has(obj.objectId)) issues.push({ field: path, message: `Duplicate objectId: ${obj.objectId}`, rejectedValue: obj.objectId });
-        else seen.add(obj.objectId);
-      }
-    };
-    add(data, 'root');
-    if (data.planCostShares) add(data.planCostShares, 'planCostShares');
+    const issues = [];
+  
+    // Only enforce uniqueness for planservice IDs within the array.
+    const seenPlanservice = new Set();
+  
     if (Array.isArray(data.linkedPlanServices)) {
       data.linkedPlanServices.forEach((s, i) => {
-        add(s, `linkedPlanServices[${i}]`);
-        if (s.linkedService) add(s.linkedService, `linkedPlanServices[${i}].linkedService`);
-        if (s.planserviceCostShares) add(s.planserviceCostShares, `linkedPlanServices[${i}].planserviceCostShares`);
+        if (!s) return;
+  
+        // 1) planservice.objectId must be unique among siblings
+        if (s.objectId) {
+          if (seenPlanservice.has(s.objectId)) {
+            issues.push({
+              field: `linkedPlanServices[${i}]`,
+              message: `Duplicate planservice objectId: ${s.objectId}`,
+              rejectedValue: s.objectId
+            });
+          } else {
+            seenPlanservice.add(s.objectId);
+          }
+        }
+  
+        // 2) DO NOT enforce uniqueness for linkedService.objectId
+        //    Services may be shared across multiple planservices.
+  
+        // 3) DO NOT enforce uniqueness for planserviceCostShares.objectId
+        //    Member-cost-shares may also be shared.
+  
+        // If you still want *existence* checks, do that elsewhere against the store,
+        // not as "duplicate" structure validation here.
       });
     }
+  
+    // Root-level planCostShares may reuse the same membercostshare id as a planservice if desired.
+    // If you want to forbid that, add a check here comparing
+    // data.planCostShares.objectId against each s.planserviceCostShares.objectId.
+  
     return { isValid: issues.length === 0, errors: issues };
   }
 
