@@ -127,13 +127,14 @@ async function indexPlan(planId) {
     await es.index({
         index: 'plans',
         id: plan.objectId,
+        routing: plan.objectId,   // 🔹 add this
         document: {
             join_field: 'plan',
             objectId: plan.objectId,
             _org: plan._org,
             planType: plan.planType,
-            creationDate: plan.creationDate,
-        },
+            creationDate: plan.creationDate
+        }
     });
 
     // children
@@ -166,26 +167,23 @@ async function deletePlanFromIndex(planId) {
     try {
         const resp = await es.deleteByQuery({
             index: 'plans',
+            refresh: true,          // make deletions immediately visible to searches
             body: {
                 query: {
-                    bool: {
-                        should: [
-                            { term: { objectId: planId } },             // parent doc
-                            { term: { 'join_field.parent': planId } },  // child docs
-                        ],
-                        minimum_should_match: 1,
-                    },
-                },
-            },
+                    term: {
+                        _routing: planId  // delete parent + all children with this routing key
+                    }
+                }
+            }
         });
 
         console.log(
-            `Deleted plan ${planId} and its children from index`,
+            `🧹 Deleted plan ${planId} and its children from index`,
             resp.deleted ?? ''
         );
     } catch (err) {
         console.error(
-            `Failed to delete plan ${planId} from index:`,
+            `❌ Failed to delete plan ${planId} from index:`,
             err.meta?.body || err
         );
     }

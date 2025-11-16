@@ -364,31 +364,72 @@ async patchPlan(req, res) {
 }
 
   // ---------- DELETE /v1/plan/:objectId ----------
-  async deletePlan(req, res) {
-    try {
-      const planId = req.params.objectId;
+// ---------- DELETE /v1/plan/:objectId ----------
+async deletePlan(req, res) {
+  try {
+    const planId = req.params.objectId;
 
-      // Existence
-      const ref = await get(NS.plan, planId);
-      if (!ref) {
-        return res.status(404).json({ error: 'Not Found', message: `Plan with objectId ${planId} not found` });
-      }
-
-      // Composite etag for If-Match
-      // const { childEtags } = await expandPlanWithEtags(ref.data);
-      // const composite = computeCompositePlanETag(ref.data, [ref.etag, ...childEtags]);
-      // if (!this.requireIfMatchOr412(req, res, composite)) return;
-
-      // Delete ONLY the plan parent; keep children intact (safer)
-      const ok = await del(NS.plan, planId);
-      await enqueueIndexJob({ op: "delete", planId });
-      if (ok) return res.status(204).end();
-      return res.status(500).json({ error: 'Internal server error', message: 'Failed to delete plan' });
-    } catch (e) {
-      console.error('Error deleting plan:', e);
-      res.status(500).json({ error: 'Internal server error', message: 'Failed to delete plan' });
+    // 1) Load parent ref
+    const ref = await get(NS.plan, planId);
+    if (!ref) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: `Plan with objectId ${planId} not found`
+      });
     }
+
+    // 2) Expand once so we know all children that belong to this plan
+    const { materialized } = await expandPlanWithEtags(ref.data);
+
+    const deletes = [];
+
+    // 2a) Root planCostShares
+    if (materialized.planCostShares?.objectId) {
+      deletes.push(del(NS.membercostshare, materialized.planCostShares.objectId));
+    }
+
+    // 2b) All linkedPlanServices + their nested service & cost share
+    if (Array.isArray(materialized.linkedPlanServices)) {
+      for (const lps of materialized.linkedPlanServices) {
+        // planservice itself
+        if (lps.objectId) {
+          deletes.push(del(NS.planservice, lps.objectId));
+        }
+        // linkedService
+        if (lps.linkedService?.objectId) {
+          deletes.push(del(NS.service, lps.linkedService.objectId));
+        }
+        // planserviceCostShares
+        if (lps.planserviceCostShares?.objectId) {
+          deletes.push(del(NS.membercostshare, lps.planserviceCostShares.objectId));
+        }
+      }
+    }
+
+    // 2c) Wait for all child deletes
+    await Promise.all(deletes);
+
+    // 3) Delete the parent plan
+    const ok = await del(NS.plan, planId);
+
+    // 4) Tell the worker to remove from Elasticsearch as well
+    await enqueueIndexJob({ op: 'delete', planId });
+
+    if (ok) {
+      return res.status(204).end();
+    }
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: 'Failed to delete plan'
+    });
+  } catch (e) {
+    console.error('Error deleting plan:', e);
+    res.status(500).json({
+      error: 'Internal server error',
+      message: 'Failed to delete plan'
+    });
   }
+}
 
   // ---------- Health ----------
   async healthCheck(req, res) {
