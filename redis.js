@@ -22,6 +22,12 @@ class RedisClient {
 
   async connect() {
     try {
+      // If already open, don't try to connect again
+      if (this.client.isOpen) {
+        console.log('Redis client already connected, skipping connect()');
+        return;
+      }
+
       await this.client.connect();
       console.log('Redis client connected successfully');
     } catch (error) {

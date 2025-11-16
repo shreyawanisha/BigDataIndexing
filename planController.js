@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const redisClient = require('./redis');
 const validator = require('./validator');
 const { applyMergePatch } = require('./mergePatch');
+const { enqueueIndexJob } = require('./queue');
 
 const NS = {
   plan: 'plan',
@@ -174,6 +175,8 @@ class PlanController {
       const { childEtags } = await expandPlanWithEtags(refDoc);
       const composite = computeCompositePlanETag(refDoc, [refEtag, ...childEtags]);
 
+      await enqueueIndexJob({ op: "upsert", planId });
+
       return res
         .status(201)
         .header('ETag', `"${composite}"`)
@@ -211,52 +214,6 @@ class PlanController {
     } catch (e) {
       console.error('Error retrieving plan:', e);
       res.status(500).json({ error: 'Internal server error', message: 'Failed to retrieve plan' });
-    }
-  }
-
-  // ---------- PUT /v1/plan/:objectId (full replace) ----------
-  async updatePlan(req, res) {
-    try {
-      const planId = req.params.objectId;
-
-      // Ensure plan exists to compute composite ETag for If-Match
-      const existingRef = await get(NS.plan, planId);
-      if (!existingRef) {
-        return res.status(404).json({ error: 'Not Found', message: `Plan with objectId ${planId} not found` });
-      }
-
-      const { childEtags: beforeChildEtags } = await expandPlanWithEtags(existingRef.data);
-      const beforeComposite = computeCompositePlanETag(existingRef.data, [existingRef.etag, ...beforeChildEtags]);
-      if (!this.requireIfMatchOr412(req, res, beforeComposite)) return;
-
-      const planData = req.body;
-
-      // optional: enforce path id = body id
-      if (planData.objectId && planData.objectId !== planId) {
-        return res.status(400).json({ error: 'Invalid objectId', message: 'Body objectId must match path parameter' });
-      }
-
-      const validation = validator.completeValidation(planData);
-      if (!validation.isValid) {
-        return res.status(400).json({ error: 'Validation failed', details: validation.errors });
-      }
-
-      // rewrite children + ref
-      await writeChildEntities(planData);
-      const refDoc = toPlanRefDoc(planData);
-      const refEtag = await put(NS.plan, planId, refDoc);
-
-      const { materialized, childEtags } = await expandPlanWithEtags(refDoc);
-      const composite = computeCompositePlanETag(refDoc, [refEtag, ...childEtags]);
-
-      return res
-        .status(200)
-        .header('ETag', `"${composite}"`)
-        .header('Cache-Control', 'no-cache')
-        .json(materialized);
-    } catch (e) {
-      console.error('Error updating plan:', e);
-      res.status(500).json({ error: 'Internal server error', message: 'Failed to update plan' });
     }
   }
 
@@ -393,6 +350,8 @@ async patchPlan(req, res) {
     const { childEtags } = await expandPlanWithEtags(ref.data);
     const composite = computeCompositePlanETag(ref.data, [refEtag, ...childEtags]);
 
+    await enqueueIndexJob({ op: "upsert", planId });
+
     return res
       .status(200)
       .header('ETag', `"${composite}"`)
@@ -422,56 +381,12 @@ async patchPlan(req, res) {
 
       // Delete ONLY the plan parent; keep children intact (safer)
       const ok = await del(NS.plan, planId);
+      await enqueueIndexJob({ op: "delete", planId });
       if (ok) return res.status(204).end();
       return res.status(500).json({ error: 'Internal server error', message: 'Failed to delete plan' });
     } catch (e) {
       console.error('Error deleting plan:', e);
       res.status(500).json({ error: 'Internal server error', message: 'Failed to delete plan' });
-    }
-  }
-
-  // ---------- GET /v1/plans (summary) ----------
-  async getAllPlans(req, res) {
-    try {
-      const keys = await listKeys(`${NS.plan}:*`);
-      const out = [];
-      for (const key of keys) {
-        const id = key.substring(key.indexOf(':') + 1);
-        const ref = await get(NS.plan, id);
-        if (ref) {
-          out.push({
-            objectId: ref.data.objectId,
-            planType: ref.data.planType,
-            creationDate: ref.data.creationDate,
-            etag: ref.etag,
-          });
-        }
-      }
-      res.status(200).json({ count: out.length, plans: out });
-    } catch (e) {
-      console.error('Error retrieving all plans:', e);
-      res.status(500).json({ error: 'Internal server error', message: 'Failed to retrieve plans' });
-    }
-  }
-
-  // ---------- Debug (unchanged shape) ----------
-  async debugDatabase(req, res) {
-    try {
-      if (process.env.NODE_ENV === 'production') {
-        return res.status(403).json({ error: 'Forbidden', message: 'Debug endpoint not available in production' });
-      }
-      const keys = await listKeys('*');
-      const allData = {};
-      for (const key of keys) {
-        const result = await redisClient.getData(key);
-        if (result) {
-          allData[key] = { data: result.data, etag: result.etag };
-        }
-      }
-      res.status(200).json({ totalKeys: keys.length, keys, data: allData });
-    } catch (e) {
-      console.error('Error getting debug data:', e);
-      res.status(500).json({ error: 'Internal server error', message: 'Failed to retrieve debug data' });
     }
   }
 

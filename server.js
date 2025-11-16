@@ -5,6 +5,8 @@ const redisClient = require('./redis');
 const planController = require('./planController');
 const verifyGoogleToken = require('./authMiddleware');
 const { applyMergePatch } = require('./mergePatch');
+const { connectQueue, closeQueue } = require('./queue');
+const searchController = require('./searchController');
 
 class Server {
   constructor() {
@@ -78,10 +80,9 @@ class Server {
 
     // Plan routes
     v1Router.post('/plan', planController.createPlan.bind(planController));
+    v1Router.get('/plan/search', searchController.searchPlans.bind(searchController));
     v1Router.get('/plan/:objectId', planController.getPlan.bind(planController));
     v1Router.delete('/plan/:objectId', planController.deletePlan.bind(planController));
-    v1Router.get('/plans', planController.getAllPlans.bind(planController));
-    v1Router.put('/plan/:objectId', planController.updatePlan.bind(planController));
     v1Router.patch('/plan/:objectId', planController.patchPlan.bind(planController));
 
     // Health check route
@@ -165,6 +166,10 @@ class Server {
       console.log('Connecting to Redis...');
       await redisClient.connect();
 
+    // Connect to RabbitMQ
+    console.log('Connecting to RabbitMQ...');
+    await connectQueue();
+
       // Start Express server
       this.app.listen(this.port, () => {
         console.log(`Server is running on port ${this.port}`);
@@ -185,14 +190,20 @@ class Server {
 
   async gracefulShutdown() {
     console.log('\n🔄 Graceful shutdown initiated...');
-    
+  
     try {
       await redisClient.disconnect();
       console.log('Redis connection closed');
     } catch (error) {
       console.error('Error closing Redis connection:', error);
     }
-    
+  
+    try {
+      await closeQueue();
+    } catch (error) {
+      console.error('Error closing RabbitMQ connection:', error);
+    }
+  
     console.log('Server shutdown complete');
     process.exit(0);
   }
